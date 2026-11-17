@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>代购核价计算器</title>
+  <style>
+    body {
+      max-width: 960px;
+      margin: 32px auto;
+      padding: 0 16px;
+      color: #182230;
+      background: #f5f7fa;
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+    fieldset, .results {
+      margin: 16px 0;
+      padding: 16px;
+      border: 1px solid #bac5d1;
+      border-radius: 8px;
+      background: white;
+    }
+    legend { font-weight: 700; }
+    .fields {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+      gap: 12px;
+    }
+    .fields[hidden] { display: none; }
+    label { display: grid; gap: 4px; }
+    input, select { padding: 8px; font: inherit; }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+    th, td { padding: 10px; border-bottom: 1px solid #dbe2ea; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    #message { color: #8b251c; }
+  </style>
+</head>
+<body>
+  <h1>代购核价计算器</h1>
+
+  <form id="calculator">
+    <fieldset>
+      <legend>商品与消费税</legend>
+      <div class="fields">
+        <label>商品原价（CAD）
+          <input name="price" type="number" min="0" step="0.01" value="100" required>
+        </label>
+        <label>消费税率（%）
+          <input name="tax" type="number" min="0" max="100" step="0.01" value="5" required>
+        </label>
+        <label>汇率（1 CAD 兑换多少人民币）
+          <input name="exchange" type="number" min="0.0001" step="0.0001" value="4.95" required>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>运费</legend>
+      <label>计费方式
+        <select name="shippingMode">
+          <option value="unit">重量或体积 × 单价</option>
+          <option value="flat">直接输入运费总额</option>
+        </select>
+      </label>
+      <p id="unitNote">例如按磅计费时，数量填磅数，单价填每磅加币价格。</p>
+      <div id="unitShipping" class="fields">
+        <label>重量或体积
+          <input name="quantity" type="number" min="0" step="any" value="2" required>
+        </label>
+        <label>每单位运费（CAD）
+          <input name="shippingRate" type="number" min="0" step="0.01" value="5" required>
+        </label>
+      </div>
+      <div id="flatShipping" class="fields" hidden>
+        <label>运费总额（CAD）
+          <input name="shippingTotal" type="number" min="0" step="0.01" value="0" required>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>代购费</legend>
+      <div class="fields">
+        <label>代购费 1（到手成本的 %）
+          <input name="markup" type="number" min="0" step="0.01" value="20" required>
+        </label>
+        <label>代购费 2（固定金额，人民币）
+          <input name="fixedFee" type="number" min="0" step="0.01" value="0" required>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>采购折扣比较</legend>
+      <div class="fields">
+        <label>方案 A（% off）
+          <input name="discountA" type="number" min="0" max="100" step="0.01" value="0" required>
+        </label>
+        <label>方案 B（% off）
+          <input name="discountB" type="number" min="0" max="100" step="0.01" value="10" required>
+        </label>
+        <label>方案 C（% off）
+          <input name="discountC" type="number" min="0" max="100" step="0.01" value="20" required>
+        </label>
+      </div>
+    </fieldset>
+  </form>
+
+  <section class="results">
+    <h2>核价结果</h2>
+    <p id="message" role="status"></p>
+    <div class="table-scroll">
+      <table id="resultTable" aria-label="三个采购折扣的核价结果">
+        <thead>
+          <tr>
+            <th scope="col">采购折扣</th>
+            <th scope="col">折后价（CAD）</th>
+            <th scope="col">税（CAD）</th>
+            <th scope="col">运费（CAD）</th>
+            <th scope="col">到手成本（人民币）</th>
+            <th scope="col">建议售价（人民币）</th>
+            <th scope="col">预计利润（人民币）</th>
+          </tr>
+        </thead>
+        <tbody id="results"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    const form = document.getElementById('calculator');
+    const fields = form.elements;
+    const results = document.getElementById('results');
+    const table = document.getElementById('resultTable');
+    const message = document.getElementById('message');
+    const dollars = new Intl.NumberFormat('en-CA', {
+      style: 'currency', currency: 'CAD', currencyDisplay: 'code'
+    });
+    const yuan = new Intl.NumberFormat('zh-CN', {
+      style: 'currency', currency: 'CNY'
+    });
+
+    function number(name) {
+      return fields.namedItem(name).valueAsNumber;
+    }
+
+    function calculate() {
+      const byUnit = fields.namedItem('shippingMode').value === 'unit';
+      document.getElementById('unitNote').hidden = !byUnit;
+      document.getElementById('unitShipping').hidden = !byUnit;
+      document.getElementById('flatShipping').hidden = byUnit;
+      fields.namedItem('quantity').disabled = !byUnit;
+      fields.namedItem('shippingRate').disabled = !byUnit;
+      fields.namedItem('shippingTotal').disabled = byUnit;
+
+      results.replaceChildren();
+      table.hidden = !form.checkValidity();
+      if (table.hidden) {
+        message.textContent = '请填完所有可见字段。税率和折扣须在 0–100% 之间，汇率须大于 0。';
+        return;
+      }
+      message.textContent = '';
+
+      const price = number('price');
+      const taxRate = number('tax') / 100;
+      const exchange = number('exchange');
+      const markupRate = number('markup') / 100;
+      const fixedFee = number('fixedFee');
+      const shipping = byUnit
+        ? number('quantity') * number('shippingRate')
+        : number('shippingTotal');
+
+      for (const field of ['discountA', 'discountB', 'discountC']) {
+        const discount = number(field);
+        const discountedPrice = price * (1 - discount / 100);
+        const tax = discountedPrice * taxRate;
+        const landedCost = (discountedPrice + tax + shipping) * exchange;
+        const profit = landedCost * markupRate + fixedFee;
+        const sellingPrice = landedCost + profit;
+
+        const row = results.insertRow();
+        const values = [
+          discount === 0 ? '原价' : `${discount}% off`,
+          dollars.format(discountedPrice),
+          dollars.format(tax),
+          dollars.format(shipping),
+          yuan.format(landedCost),
+          yuan.format(sellingPrice),
+          yuan.format(profit)
+        ];
+        for (const value of values) {
+          row.insertCell().textContent = value;
+        }
+      }
+    }
+
+    form.addEventListener('input', calculate);
+    form.addEventListener('change', calculate);
+    form.addEventListener('submit', event => event.preventDefault());
+    calculate();
+  </script>
+</body>
+</html>
